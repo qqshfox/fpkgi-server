@@ -1,0 +1,14 @@
+[Unit]
+Description=FPKGi Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fpkgi-server host --port 8000 --packages /data/packages:/pkgs --url http://localhost:8000 --out /data/jsons:/jsons --icons /data/icons:/icons
+Restart=always
+User=fpkgi
+WorkingDirectory=/data
+Environment="RUST_LOG=info"
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+version: "3.8"
+services:
+  fpkgi-server:
+    image: ghcr.io/qqshfox/fpkgi-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./packages:/data/packages
+      - ./jsons:/data/jsons
+      - ./icons:/data/icons
+    environment:
+      - RUST_LOG=info
+    command: ["host", "--port", "8000", "--packages", "/data/packages:/pkgs", "--url", "http://localhost:8000", "--out", "/data/jsons:/jsons", "--icons", "/data/icons:/icons"]
+
+volumes:
+  packages:
+  jsons:
+  icons:

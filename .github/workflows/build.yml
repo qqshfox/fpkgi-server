@@ -1,0 +1,200 @@
+name: Build, Release, and Docker Push
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
+        exclude:
+          - os: ubuntu-22.04
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.os == 'ubuntu-22.04' && 'rust:1.80-bullseye' || null }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust target (macOS)
+        if: matrix.os == 'macos-latest' && matrix.target == 'x86_64-apple-darwin'
+        run: |
+          rustup target add x86_64-apple-darwin
+
+      - name: Install Rust target (Linux ARM64)
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          apt-get update
+          apt-get install -y gcc g++ pkg-config
+          apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install pkg-config
+
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Extract Cargo.toml version
+        id: cargo_version
+        shell: bash
+        run: |
+          VERSION=$(cargo pkgid | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || echo "0.1.0")
+          echo "cargo_toml_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          VERSION=${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}
+          if [ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]; then
+            cp target/${{ matrix.target }}/release/fpkgi-server.exe artifacts/fpkgi-server-v${VERSION}-${{ matrix.target }}.exe
+          else
+            cp target/${{ matrix.target }}/release/fpkgi-server artifacts/fpkgi-server-v${VERSION}-${{ matrix.target }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-${{ matrix.target }}
+          path: artifacts/
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract Cargo.toml version
+        id: cargo_version
+        shell: bash
+        run: |
+          VERSION=$(cargo pkgid | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || echo "0.1.0")
+          echo "cargo_toml_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Debug Info
+        run: |
+          echo "Tag Name: v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}"
+          echo "GITHUB_TOKEN present: ${{ secrets.GITHUB_TOKEN != '' }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event Name: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}
+          name: Release v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}
+          body: |
+            Automated release generated on ${{ github.event.head_commit.message }}.
+            Binaries for macOS (x86_64 and ARM64), Linux (x86_64 and ARM64), and Windows (x86_64) are attached below.
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-unknown-linux-gnu/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-unknown-linux-gnu
+            artifacts/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-aarch64-unknown-linux-gnu/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-aarch64-unknown-linux-gnu
+            artifacts/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-apple-darwin/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-apple-darwin
+            artifacts/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-aarch64-apple-darwin/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-aarch64-apple-darwin
+            artifacts/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-pc-windows-msvc/fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-x86_64-pc-windows-msvc.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-push:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # Only run on push events, not PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Cargo.toml version
+        id: cargo_version
+        shell: bash
+        run: |
+          VERSION=$(cargo pkgid | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$' || echo "0.1.0")
+          echo "cargo_toml_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download artifacts from Build
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: fpkgi-server-v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}-*
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/fpkgi-server:v${{ steps.cargo_version.outputs.cargo_toml_version }}-${{ github.run_number }}
+            ghcr.io/${{ github.repository_owner }}/fpkgi-server:latest
