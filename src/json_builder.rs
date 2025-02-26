@@ -26,14 +26,32 @@ fn build_json_schema<'a>(icon_link: Option<String>, pkg_bytes: u64) -> Vec<(Opti
     ]
 }
 
+fn parse_region_from_content_id(content_id: &str) -> String {
+    // Extract the first two characters as the region code
+    let region_code = content_id.get(0..2).unwrap_or("??").to_uppercase();
+
+    // Apply the mapping
+    match region_code.as_str() {
+        "JP" => "JAP".to_string(),
+        "UP" => "USA".to_string(),
+        "EP" => "EUR".to_string(),
+        _ => "UNK".to_string(),
+    }
+}
+
 fn convert_sfo_to_json(base_link: &str, pkg_link: &str, pkg_bytes: u64, icon_path: Option<String>,
-                       sfo_data: HashMap<String, String>) -> (String, String, HashMap<String, JsonValue>) {
+                       sfo_data: HashMap<String, String>, content_id: &str) -> (String, String, HashMap<String, JsonValue>) {
     let icon_link = icon_path.map(|p| format!("{}/{}", base_link, p));
     let mut json_output = HashMap::new();
+
+    // Parse region from content_id
+    let region = parse_region_from_content_id(content_id);
 
     for (source, target, default_str, default_int) in build_json_schema(icon_link, pkg_bytes) {
         let value = if let Some(sfo_key) = source {
             sfo_data.get(sfo_key).cloned().map(JsonValue::String)
+        } else if target == "region" {
+            Some(JsonValue::String(region.clone())) // Insert parsed region
         } else if target == "size" {
             default_int.map(|n| JsonValue::Number(serde_json::Number::from(n)))
         } else if let Some(s) = default_str {
@@ -100,7 +118,14 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
                     None
                 };
 
-                let (cat, link, json_entry) = convert_sfo_to_json(&args.url, &pkg_url_path, pkg_bytes, icon_path, sfo_data);
+                let (cat, link, json_entry) = convert_sfo_to_json(
+                    &args.url,
+                    &pkg_url_path,
+                    pkg_bytes,
+                    icon_path,
+                    sfo_data,
+                    &pkg.content_id // Pass content_id here
+                );
                 let category = CATEGORY_MAP.iter().find(|&&(k, _)| k == cat).map(|&(_, v)| v).unwrap_or("games");
                 output_data.get_mut(category).unwrap().insert(link, json_entry);
             }
