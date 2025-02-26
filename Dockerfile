@@ -19,4 +19,5 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     chmod +x /usr/local/bin/fpkgi-server
 
 EXPOSE 8000
-CMD ["fpkgi-server", "host", "--port", "8000", "--packages", "/data/packages:/pkgs", "--url", "http://localhost:8000", "--out", "/data/jsons:/jsons", "--icons", "/data/icons:/icons"]
+ENTRYPOINT ["fpkgi-server"]
+CMD ["host", "--port", "8000", "--packages", "/data/packages:pkgs", "--url", "http://localhost:8000", "--out", "/data/jsons:jsons", "--icons", "/data/icons:icons"]

@@ -13,7 +13,7 @@ services:
       - ./icons:/data/icons
     environment:
       - RUST_LOG=info
-    command: ["host", "--port", "8000", "--packages", "/data/packages:/pkgs", "--url", "http://localhost:8000", "--out", "/data/jsons:/jsons", "--icons", "/data/icons:/icons"]
+    command: ["host", "--port", "8000", "--packages", "/data/packages:pkgs", "--url", "http://localhost:8000", "--out", "/data/jsons:jsons", "--icons", "/data/icons:icons"]
 
 volumes:
   packages:
