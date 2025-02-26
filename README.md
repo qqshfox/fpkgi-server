@@ -53,7 +53,7 @@ FPKGi Server supports several commands via CLI arguments using `clap`. Below are
 Run a server, generate JSONs, and regenerate on package changes:
 
 ```bash
-fpkgi-server host --port 8080 --packages "/path/to/packages:/pkgs" --url "http://example.com" --out "/path/to/output:/jsons" --icons "/path/to/icons:/icons"
+fpkgi-server host --port 8080 --packages "/path/to/packages:pkgs" --url "http://example.com" --out "/path/to/output:jsons" --icons "/path/to/icons:icons"
 ```
 
 - Combines serving, generating, and watching functionality
@@ -63,7 +63,7 @@ fpkgi-server host --port 8080 --packages "/path/to/packages:/pkgs" --url "http:/
 Generate JSON metadata from PS4 package files:
 
 ```bash
-fpkgi-server generate --packages "/path/to/packages:/pkgs" --url "http://example.com" --out "/path/to/output:/jsons" --icons "/path/to/icons:/icons"
+fpkgi-server generate --packages "/path/to/packages:pkgs" --url "http://example.com" --out "/path/to/output:jsons" --icons "/path/to/icons:icons"
 ```
 
 - `--packages`: Directory containing PKG files (format: `fs_path:url_path`)
@@ -97,7 +97,7 @@ fpkgi-server watch --dirs "/path/to/packages"
 Control log verbosity with the `RUST_LOG` environment variable:
 
 ```bash
-RUST_LOG=debug fpkgi-server host --port 8080 --packages "/path/to/packages:/pkgs" --url "http://example.com" --out "/path/to/output:/jsons"
+RUST_LOG=debug fpkgi-server host --port 8080 --packages "/path/to/packages:pkgs" --url "http://example.com" --out "/path/to/output:jsons"
 ```
 
 - Levels: `error`, `warn`, `info`, `debug` (default: `info`)
@@ -162,7 +162,7 @@ fpkgi-server/
 
 ## Building for Multiple Platforms
 
-GitHub Actions workflows (`build.yml` and `docker-build.yml`) build binaries and a multi-arch Docker image (linux/x86_64, linux/arm64) for macOS (Intel and Apple Silicon), Linux (x86_64 and ARM64), and Windows (x86_64). Binaries are released as GitHub Release assets, and the Docker image is pushed to `ghcr.io/qqshfox/fpkgi-server`.
+The GitHub Actions workflow (`build.yml`) builds binaries and a multi-arch Docker image (linux/x86_64, linux/arm64) for macOS (Intel and Apple Silicon), Linux (x86_64 and ARM64), and Windows (x86_64). Binaries are released as GitHub Release assets, and the Docker image is pushed to `ghcr.io/qqshfox/fpkgi-server`.
 
 ## Dependencies
 
