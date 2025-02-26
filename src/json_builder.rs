@@ -4,6 +4,7 @@ use std::fs;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 use log::{info, error, debug};
+use walkdir::WalkDir; // Add this import
 
 use crate::args::GenerateArgs;
 use crate::sfo_processor;
@@ -27,10 +28,7 @@ fn build_json_schema<'a>(icon_link: Option<String>, pkg_bytes: u64) -> Vec<(Opti
 }
 
 fn parse_region_from_content_id(content_id: &str) -> String {
-    // Extract the first two characters as the region code
     let region_code = content_id.get(0..2).unwrap_or("??").to_uppercase();
-
-    // Apply the mapping
     match region_code.as_str() {
         "JP" => "JAP".to_string(),
         "UP" => "USA".to_string(),
@@ -43,15 +41,13 @@ fn convert_sfo_to_json(base_link: &str, pkg_link: &str, pkg_bytes: u64, icon_pat
                        sfo_data: HashMap<String, String>, content_id: &str) -> (String, String, HashMap<String, JsonValue>) {
     let icon_link = icon_path.map(|p| format!("{}/{}", base_link, p));
     let mut json_output = HashMap::new();
-
-    // Parse region from content_id
     let region = parse_region_from_content_id(content_id);
 
     for (source, target, default_str, default_int) in build_json_schema(icon_link, pkg_bytes) {
         let value = if let Some(sfo_key) = source {
             sfo_data.get(sfo_key).cloned().map(JsonValue::String)
         } else if target == "region" {
-            Some(JsonValue::String(region.clone())) // Insert parsed region
+            Some(JsonValue::String(region.clone()))
         } else if target == "size" {
             default_int.map(|n| JsonValue::Number(serde_json::Number::from(n)))
         } else if let Some(s) = default_str {
@@ -74,65 +70,58 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
     let icon_paths = args.icons.as_ref().map(|(fs, url)| (fs, url));
     let (_json_fs_root, _json_url_root) = &args.out;
 
-    match fs::read_dir(pkg_fs_root) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().map_or(true, |ext| ext != "pkg") {
-                    continue;
-                }
+    // Use WalkDir for recursive traversal
+    for entry in WalkDir::new(pkg_fs_root).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().map_or(true, |ext| ext != "pkg") {
+            continue;
+        }
 
-                let pkg_bytes = fs::metadata(&path)?.len();
-                let pkg_rel_path = path.strip_prefix(pkg_fs_root)?.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
-                let pkg_url_path = format!("{}/{}", pkg_url_root, pkg_rel_path);
+        let pkg_bytes = fs::metadata(&path)?.len();
+        let pkg_rel_path = path.strip_prefix(pkg_fs_root)?.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let pkg_url_path = format!("{}/{}", pkg_url_root, pkg_rel_path);
 
-                info!("Processing package: {} ({} bytes)", path.display(), pkg_bytes);
+        info!("Processing package: {} ({} bytes)", path.display(), pkg_bytes);
 
-                let pkg = match PS4Package::new(path.clone()) {
-                    Ok(pkg) => pkg,
-                    Err(e) => {
-                        error!("Failed to process package '{}': {}", path.display(), e);
-                        continue;
-                    }
-                };
-
-                let sfo_data = match sfo_processor::SFOProcessor::new().process(pkg.get_file("param.sfo").unwrap_or_default()) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to parse SFO for '{}': {}", path.display(), e);
-                        continue;
-                    }
-                };
-
-                let icon_path = if let Some((icon_fs_root, icon_url_root)) = icon_paths {
-                    fs::create_dir_all(icon_fs_root)?;
-                    let icon_name = format!("{}.png", path.file_name().unwrap().to_string_lossy());
-                    let icon_fullpath = icon_fs_root.join(&icon_name);
-                    if let Err(e) = pkg.save_file("icon0.png", &icon_fullpath) {
-                        info!("No icon extracted for '{}': {}", path.display(), e);
-                    }
-                    debug!("Extracted icon to '{}'", icon_fullpath.display());
-                    Some(format!("{}/{}", icon_url_root, icon_name))
-                } else {
-                    None
-                };
-
-                let (cat, link, json_entry) = convert_sfo_to_json(
-                    &args.url,
-                    &pkg_url_path,
-                    pkg_bytes,
-                    icon_path,
-                    sfo_data,
-                    &pkg.content_id // Pass content_id here
-                );
-                let category = CATEGORY_MAP.iter().find(|&&(k, _)| k == cat).map(|&(_, v)| v).unwrap_or("games");
-                output_data.get_mut(category).unwrap().insert(link, json_entry);
+        let pkg = match PS4Package::new(path.to_path_buf()) { // Changed to to_path_buf()
+            Ok(pkg) => pkg,
+            Err(e) => {
+                error!("Failed to process package '{}': {}", path.display(), e);
+                continue;
             }
-        }
-        Err(e) => {
-            return Err(anyhow::anyhow!("Failed to read packages directory '{}': {}", pkg_fs_root.display(), e));
-        }
+        };
+
+        let sfo_data = match sfo_processor::SFOProcessor::new().process(pkg.get_file("param.sfo").unwrap_or_default()) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to parse SFO for '{}': {}", path.display(), e);
+                continue;
+            }
+        };
+
+        let icon_path = if let Some((icon_fs_root, icon_url_root)) = icon_paths {
+            fs::create_dir_all(icon_fs_root)?;
+            let icon_name = format!("{}.png", path.file_name().unwrap().to_string_lossy());
+            let icon_fullpath = icon_fs_root.join(&icon_name);
+            if let Err(e) = pkg.save_file("icon0.png", &icon_fullpath) {
+                info!("No icon extracted for '{}': {}", path.display(), e);
+            }
+            debug!("Extracted icon to '{}'", icon_fullpath.display());
+            Some(format!("{}/{}", icon_url_root, icon_name))
+        } else {
+            None
+        };
+
+        let (cat, link, json_entry) = convert_sfo_to_json(
+            &args.url,
+            &pkg_url_path,
+            pkg_bytes,
+            icon_path,
+            sfo_data,
+            &pkg.content_id
+        );
+        let category = CATEGORY_MAP.iter().find(|&&(k, _)| k == cat).map(|&(_, v)| v).unwrap_or("games");
+        output_data.get_mut(category).unwrap().insert(link, json_entry);
     }
 
     Ok(output_data)

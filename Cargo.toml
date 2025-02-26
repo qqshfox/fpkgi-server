@@ -19,3 +19,4 @@ tokio-util = { version = "0.7", features = ["io"] }
 clap = { version = "4", features = ["derive"] }
 percent-encoding = "2"
 notify = "8.0"
+walkdir = "2"
