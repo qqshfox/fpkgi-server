@@ -4,7 +4,7 @@ use std::fs;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 use log::{info, error, debug};
-use walkdir::WalkDir; // Add this import
+use walkdir::WalkDir;
 
 use crate::args::GenerateArgs;
 use crate::sfo_processor;
@@ -14,14 +14,14 @@ const CATEGORY_MAP: &[(&str, &str)] = &[
     ("gd", "games"), ("gp", "updates"), ("ac", "DLC"), ("gde", "homebrew")
 ];
 
-fn build_json_schema<'a>(icon_link: Option<String>, pkg_bytes: u64) -> Vec<(Option<&'a str>, &'a str, Option<String>, Option<u32>)> {
+fn build_json_schema<'a>(icon_link: Option<String>, pkg_bytes: u64) -> Vec<(Option<&'a str>, &'a str, Option<String>, Option<u64>)> {
     vec![
         (Some("TITLE_ID"), "title_id", None, None),
         (None, "region", None, None),
         (Some("TITLE"), "name", None, None),
         (Some("APP_VER"), "version", None, None),
         (None, "release", None, None),
-        (None, "size", None, Some(pkg_bytes as u32)),
+        (None, "size", None, Some(pkg_bytes)),
         (None, "min_fw", None, None),
         (None, "cover_url", icon_link, None),
     ]
@@ -70,7 +70,6 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
     let icon_paths = args.icons.as_ref().map(|(fs, url)| (fs, url));
     let (_json_fs_root, _json_url_root) = &args.out;
 
-    // Use WalkDir for recursive traversal
     for entry in WalkDir::new(pkg_fs_root).into_iter().filter_map(Result::ok) {
         let path = entry.path();
         if path.extension().map_or(true, |ext| ext != "pkg") {
@@ -83,7 +82,7 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
 
         info!("Processing package: {} ({} bytes)", path.display(), pkg_bytes);
 
-        let pkg = match PS4Package::new(path.to_path_buf()) { // Changed to to_path_buf()
+        let pkg = match PS4Package::new(path.to_path_buf()) {
             Ok(pkg) => pkg,
             Err(e) => {
                 error!("Failed to process package '{}': {}", path.display(), e);
