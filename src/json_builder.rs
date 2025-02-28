@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde_json::Value as JsonValue;
 use log::{info, error, debug};
 use walkdir::WalkDir;
+use percent_encoding::{utf8_percent_encode, CONTROLS, AsciiSet};
 
 use crate::args::GenerateArgs;
 use crate::sfo_processor;
@@ -13,6 +14,9 @@ use crate::ps4_package::PS4Package;
 const CATEGORY_MAP: &[(&str, &str)] = &[
     ("gd", "games"), ("gp", "updates"), ("ac", "DLC"), ("gde", "homebrew")
 ];
+
+// Custom fragment set: CONTROLS plus space
+const CONTROLS_WITH_SPACE: &AsciiSet = &CONTROLS.add(b' ');
 
 fn build_json_schema<'a>(icon_link: Option<String>, pkg_bytes: u64) -> Vec<(Option<&'a str>, &'a str, Option<String>, Option<u64>)> {
     vec![
@@ -78,7 +82,8 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
 
         let pkg_bytes = fs::metadata(&path)?.len();
         let pkg_rel_path = path.strip_prefix(pkg_fs_root)?.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
-        let pkg_url_path = format!("{}/{}", pkg_url_root, pkg_rel_path);
+        let encoded_pkg_rel_path = utf8_percent_encode(&pkg_rel_path, CONTROLS_WITH_SPACE).to_string();
+        let pkg_url_path = format!("{}/{}", pkg_url_root, encoded_pkg_rel_path);
 
         info!("Processing package: {} ({} bytes)", path.display(), pkg_bytes);
 
@@ -101,12 +106,13 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
         let icon_path = if let Some((icon_fs_root, icon_url_root)) = icon_paths {
             fs::create_dir_all(icon_fs_root)?;
             let icon_name = format!("{}.png", path.file_name().unwrap().to_string_lossy());
+            let encoded_icon_name = utf8_percent_encode(&icon_name, CONTROLS_WITH_SPACE).to_string();
             let icon_fullpath = icon_fs_root.join(&icon_name);
             if let Err(e) = pkg.save_file("icon0.png", &icon_fullpath) {
                 info!("No icon extracted for '{}': {}", path.display(), e);
             }
             debug!("Extracted icon to '{}'", icon_fullpath.display());
-            Some(format!("{}/{}", icon_url_root, icon_name))
+            Some(format!("{}/{}", icon_url_root, encoded_icon_name))
         } else {
             None
         };
