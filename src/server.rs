@@ -1,17 +1,19 @@
-use hyper::{Request, Response, StatusCode, body::Incoming};
+use hyper::{Request, Response, StatusCode, body::Incoming, HeaderMap};
 use hyper::service::service_fn;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use bytes::Bytes;
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use tokio::net::TcpListener;
 use tokio::fs::{self, File};
+use tokio::io::AsyncSeekExt;
 use tokio_util::io::ReaderStream;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::io::SeekFrom;
 use percent_encoding::percent_decode_str;
 use anyhow::Result;
 
@@ -22,7 +24,6 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    /// Creates a new ServerConfig from a HashMap of directories.
     pub fn new(directories: HashMap<String, PathBuf>) -> Self {
         ServerConfig { directories }
     }
@@ -32,7 +33,6 @@ impl ServerConfig {
 mod html {
     use super::*;
 
-    /// Generates an HTML directory index page listing available directories.
     pub fn directory_index(directories: &HashMap<String, PathBuf>) -> String {
         let mut html = String::from("<!DOCTYPE html>\n<html>\n<head><title>Directory Index</title></head>\n<body>\n<h1>Available Directories</h1>\n<ul>\n");
         for name in directories.keys() {
@@ -42,11 +42,9 @@ mod html {
         html
     }
 
-    /// Generates an HTML directory listing page for a given path and its entries.
     pub fn directory_listing(full_path: &str, entries: Vec<String>) -> String {
         let mut html = String::from("<!DOCTYPE html>\n<html><body><h1>Directory Contents</h1><ul>\n");
         for name in entries {
-            // Ensure the full path includes a trailing slash before appending the name
             let link_path = if full_path.ends_with('/') {
                 format!("{}{}", full_path, name)
             } else {
@@ -63,7 +61,6 @@ mod html {
 mod handler {
     use super::*;
 
-    /// Handles incoming HTTP requests, serving directory indexes, listings, or files.
     pub async fn handle_request(req: Request<Incoming>, config: ServerConfig) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Infallible> {
         let path = req.uri().path();
         log::info!("Handling request for: {}", path);
@@ -77,25 +74,22 @@ mod handler {
         let (base, subpath) = split_path(&clean_path);
 
         if let Some(dir_path) = config.directories.get(base) {
-            if let Some(response) = try_serve_path(dir_path, base, subpath).await {
+            if let Some(response) = try_serve_path(dir_path, base, subpath, req.headers()).await {
                 return Ok(response);
             }
             log::debug!("Not found in mapped dir: {:?} - Status: 404 Not Found", dir_path.join(subpath));
         }
 
-        // Return 404 if no match is found
         log::info!("Path not found: {} - Status: 404 Not Found", path);
         Ok(build_not_found_response())
     }
 
-    /// Splits a path into base and subpath components.
     fn split_path(path: &str) -> (&str, &str) {
         let parts: Vec<&str> = path.splitn(2, '/').collect();
         (parts.get(0).unwrap_or(&""), parts.get(1).unwrap_or(&""))
     }
 
-    /// Attempts to serve a file or directory listing from the given path.
-    async fn try_serve_path(dir_path: &Path, base: &str, subpath: &str) -> Option<Response<BoxBody<Bytes, std::io::Error>>> {
+    async fn try_serve_path(dir_path: &Path, base: &str, subpath: &str, headers: &HeaderMap) -> Option<Response<BoxBody<Bytes, std::io::Error>>> {
         let full_path = dir_path.join(subpath);
         log::debug!("Checking: {:?}", full_path);
 
@@ -104,12 +98,12 @@ mod handler {
         }
 
         if full_path.is_file() {
-            serve_file(&full_path).await
+            serve_file(&full_path, headers).await
         } else if full_path.is_dir() {
             let request_path = if subpath.is_empty() {
-                format!("/{}", base) // e.g., "/jsons"
+                format!("/{}", base)
             } else {
-                format!("/{}/{}", base, subpath) // e.g., "/jsons/subdir"
+                format!("/{}/{}", base, subpath)
             };
             serve_directory(&full_path, &request_path).await
         } else {
@@ -117,20 +111,47 @@ mod handler {
         }
     }
 
-    /// Serves a file as a streaming response with Content-Length header.
-    async fn serve_file(path: &Path) -> Option<Response<BoxBody<Bytes, std::io::Error>>> {
+    async fn serve_file(path: &Path, headers: &HeaderMap) -> Option<Response<BoxBody<Bytes, std::io::Error>>> {
         match File::open(path).await {
-            Ok(file) => {
+            Ok(mut file) => {
                 let metadata = fs::metadata(path).await.ok()?;
                 let file_size = metadata.len();
-                log::info!("Serving file: {:?} ({} bytes) - Status: 200 OK", path, file_size);
+
+                // Parse Range header
+                if let Some(range) = headers.get("Range") {
+                    if let Ok(range_str) = range.to_str() {
+                        if let Some((start, end)) = parse_range(range_str, file_size) {
+                            // Serve partial content
+                            let content_length = end - start + 1;
+                            let content_length_usize = content_length.try_into().expect("Content length too large for usize");
+                            file.seek(SeekFrom::Start(start)).await.ok()?;
+                            let reader_stream = ReaderStream::new(file).take(content_length_usize);
+                            let stream_body = StreamBody::new(reader_stream.map(|res| res.map(hyper::body::Frame::data)));
+
+                            log::info!("Serving partial file: {:?} (bytes {}-{}, {} bytes) - Status: 206 Partial Content",
+                                      path, start, end, content_length);
+                            return Some(Response::builder()
+                                .status(StatusCode::PARTIAL_CONTENT)
+                                .header("Content-Type", "application/octet-stream")
+                                .header("Content-Length", content_length.to_string())
+                                .header("Content-Range", format!("bytes {}-{}/{}", start, end, file_size))
+                                .header("Accept-Ranges", "bytes")
+                                .body(BoxBody::new(stream_body))
+                                .unwrap());
+                        }
+                    }
+                }
+
+                // Serve full file if no valid Range header
+                log::info!("Serving full file: {:?} ({} bytes) - Status: 200 OK", path, file_size);
                 let reader_stream = ReaderStream::new(file);
-                let stream_body = StreamBody::new(reader_stream.map_ok(hyper::body::Frame::data));
+                let stream_body = StreamBody::new(reader_stream.map(|res| res.map(hyper::body::Frame::data)));
                 Some(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/octet-stream")
                     .header("Content-Length", file_size.to_string())
-                    .body(stream_body.boxed())
+                    .header("Accept-Ranges", "bytes")
+                    .body(BoxBody::new(stream_body))
                     .unwrap())
             }
             Err(e) => {
@@ -140,11 +161,33 @@ mod handler {
         }
     }
 
-    /// Serves a directory listing as an HTML response.
+    fn parse_range(range: &str, file_size: u64) -> Option<(u64, u64)> {
+        if !range.starts_with("bytes=") {
+            return None;
+        }
+        let range = &range[6..]; // Strip "bytes="
+        let parts: Vec<&str> = range.splitn(2, '-').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let start = parts[0].trim().parse::<u64>().ok()?;
+        let end = if parts[1].trim().is_empty() {
+            file_size - 1
+        } else {
+            parts[1].trim().parse::<u64>().ok()?
+        };
+
+        if start > end || end >= file_size {
+            return None;
+        }
+        Some((start, end))
+    }
+
     async fn serve_directory(path: &Path, request_path: &str) -> Option<Response<BoxBody<Bytes, std::io::Error>>> {
         match read_dir_entries(path).await {
             Ok(entries) => {
-                log::info!("Serving directory listing: {:?} - Status: 200 OK", path);
+                log::info!("Serving directory listing: {:?}", path);
                 let html = html::directory_listing(request_path, entries);
                 Some(build_ok_response("text/html", html))
             }
@@ -155,7 +198,6 @@ mod handler {
         }
     }
 
-    /// Reads directory entries into a vector of strings.
     async fn read_dir_entries(dir: &Path) -> Result<Vec<String>, std::io::Error> {
         let mut entries = Vec::new();
         let mut dir_entries = fs::read_dir(dir).await?;
@@ -165,7 +207,6 @@ mod handler {
         Ok(entries)
     }
 
-    /// Builds a successful response with the given content type and body.
     fn build_ok_response(content_type: &str, body: String) -> Response<BoxBody<Bytes, std::io::Error>> {
         Response::builder()
             .status(StatusCode::OK)
@@ -174,7 +215,6 @@ mod handler {
             .unwrap()
     }
 
-    /// Builds a 404 Not Found response.
     fn build_not_found_response() -> Response<BoxBody<Bytes, std::io::Error>> {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -184,9 +224,6 @@ mod handler {
     }
 }
 
-/// Parses directory specifications into a ServerConfig.
-///
-/// If a directory lacks a `:` separator, uses the same string for both name and path.
 pub fn parse_config(dirs: Vec<String>) -> Result<ServerConfig, String> {
     let mut directories = HashMap::new();
 
@@ -213,7 +250,6 @@ pub fn parse_config(dirs: Vec<String>) -> Result<ServerConfig, String> {
     Ok(ServerConfig { directories })
 }
 
-/// Runs the HTTP server on the specified port with the given configuration.
 pub async fn run_server(config: ServerConfig, port: u16) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("Listening on http://{}", addr);
@@ -238,7 +274,6 @@ pub async fn run_server(config: ServerConfig, port: u16) -> Result<()> {
     }
 }
 
-/// Displays the configured directories for debugging.
 fn display_directories(config: &ServerConfig) {
     log::info!("Serving directories:");
     for (name, path) in &config.directories {
