@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 use anyhow::Result;
 use serde_json::Value as JsonValue;
@@ -104,15 +105,26 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
         };
 
         let icon_path = if let Some((icon_fs_root, icon_url_root)) = icon_paths {
-            fs::create_dir_all(icon_fs_root)?;
+            // Compute the relative directory path and append the icon filename
+            let rel_dir = path.parent()
+                .unwrap_or(Path::new(""))
+                .strip_prefix(pkg_fs_root)
+                .unwrap_or(Path::new(""));
             let icon_name = format!("{}.png", path.file_name().unwrap().to_string_lossy());
-            let encoded_icon_name = utf8_percent_encode(&icon_name, CONTROLS_WITH_SPACE).to_string();
-            let icon_fullpath = icon_fs_root.join(&icon_name);
+            let icon_rel_path = rel_dir.join(&icon_name);
+            let encoded_icon_rel_path = utf8_percent_encode(&icon_rel_path.to_string_lossy(), CONTROLS_WITH_SPACE).to_string();
+            let icon_fullpath = icon_fs_root.join(&icon_rel_path);
+
+            // Ensure the directory structure exists
+            if let Some(parent) = icon_fullpath.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
             if let Err(e) = pkg.save_file("icon0.png", &icon_fullpath) {
                 info!("No icon extracted for '{}': {}", path.display(), e);
             }
             debug!("Extracted icon to '{}'", icon_fullpath.display());
-            Some(format!("{}/{}", icon_url_root, encoded_icon_name))
+            Some(format!("{}/{}", icon_url_root, encoded_icon_rel_path))
         } else {
             None
         };
