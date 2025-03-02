@@ -46,7 +46,7 @@ jobs:
             target: aarch64-apple-darwin
 
     runs-on: ${{ matrix.os }}
-    container: ${{ matrix.os == 'ubuntu-22.04' && 'rust:1.80-bullseye' || null }}
+    container: ${{ matrix.os == 'ubuntu-22.04' && 'rust:1.84-bullseye' || null }}
 
     steps:
       - name: Checkout repository
