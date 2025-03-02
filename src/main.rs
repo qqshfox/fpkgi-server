@@ -85,18 +85,23 @@ async fn main() -> Result<()> {
             let config = ServerConfig::new(directories.into_iter().collect());
             let watch_path = vec![generate_args.packages.0.clone()];
 
-            let server_handle = task::spawn(async move {
-                if let Err(e) = run_server(config, port).await {
-                    log::error!("Server error: {:?}", e);
-                }
-            });
-
+            // Generate initial JSON files
             run_generate(generate_args.clone()).await?;
 
-            let watcher = watcher::Watcher::new(watch_path).context("Failed to initialize file watcher")?;
-            watcher.run_with_generate(generate_args).await?;
+            // Start the watcher in a separate task
+            let watcher_handle = task::spawn(async move {
+                let watcher = watcher::Watcher::new(watch_path)
+                    .context("Failed to initialize file watcher")?;
+                watcher.run_with_generate(generate_args).await?;
+                Ok::<(), anyhow::Error>(())
+            });
 
-            server_handle.await?;
+            // Run the server in the main task
+            run_server(config, port).await?;
+
+            // Wait for the watcher to complete (though it runs indefinitely)
+            watcher_handle.await??;
+
             Ok(())
         }
     }
