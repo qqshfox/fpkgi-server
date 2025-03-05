@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::path::Path;
 
 use anyhow::Result;
-use serde_json::Value as JsonValue;
+use serde_json::{Value as JsonValue, from_reader, to_value};
 use log::{info, error, debug};
 use walkdir::WalkDir;
 use percent_encoding::{utf8_percent_encode, CONTROLS, AsciiSet};
@@ -67,6 +68,23 @@ fn convert_sfo_to_json(base_link: &str, pkg_link: &str, pkg_bytes: u64, icon_pat
     (category, format!("{}/{}", base_link, pkg_link), json_output)
 }
 
+fn merge_json_values(base: &mut JsonValue, external: JsonValue) {
+    match (base, external) {
+        (JsonValue::Object(base_map), JsonValue::Object(ext_map)) => {
+            for (key, ext_value) in ext_map {
+                if let Some(base_value) = base_map.get_mut(&key) {
+                    merge_json_values(base_value, ext_value);
+                } else {
+                    base_map.insert(key, ext_value);
+                }
+            }
+        }
+        (base, external) => {
+            *base = external;
+        }
+    }
+}
+
 pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<String, HashMap<String, JsonValue>>>> {
     let mut output_data: HashMap<String, HashMap<String, HashMap<String, JsonValue>>> =
         CATEGORY_MAP.iter().map(|(_, v)| (v.to_string(), HashMap::new())).collect();
@@ -105,7 +123,6 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
         };
 
         let icon_path = if let Some((icon_fs_root, icon_url_root)) = icon_paths {
-            // Compute the relative directory path and append the icon filename
             let rel_dir = path.parent()
                 .unwrap_or(Path::new(""))
                 .strip_prefix(pkg_fs_root)
@@ -115,7 +132,6 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
             let encoded_icon_rel_path = utf8_percent_encode(&icon_rel_path.to_string_lossy(), CONTROLS_WITH_SPACE).to_string();
             let icon_fullpath = icon_fs_root.join(&icon_rel_path);
 
-            // Ensure the directory structure exists
             if let Some(parent) = icon_fullpath.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -139,6 +155,46 @@ pub fn handle_packages(args: &GenerateArgs) -> Result<HashMap<String, HashMap<St
         );
         let category = CATEGORY_MAP.iter().find(|&&(k, _)| k == cat).map(|&(_, v)| v).unwrap_or("games");
         output_data.get_mut(category).unwrap().insert(link, json_entry);
+    }
+
+    if let Some(external_dir) = &args.external {
+        for entry in WalkDir::new(external_dir).into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().map_or(true, |ext| ext != "json") {
+                continue;
+            }
+
+            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            let category = file_name.strip_suffix(".json").unwrap_or(&file_name);
+            if let Some(cat_data) = output_data.get_mut(category) {
+                info!("Merging external JSON file: {}", path.display());
+                let file = File::open(path)?;
+                let external_json: JsonValue = from_reader(file)?;
+                if let JsonValue::Object(external_json) = external_json {
+                    if let Some(JsonValue::Object(data)) = external_json.get("DATA") {
+                        let mut cat_data_value = to_value(cat_data.clone())?;
+                        merge_json_values(&mut cat_data_value, JsonValue::Object(data.clone()));
+                        if let JsonValue::Object(updated_map) = cat_data_value {
+                            *cat_data = updated_map.into_iter().map(|(k, v)| {
+                                (k, v.as_object().unwrap().clone().into_iter().collect())
+                            }).collect();
+                        }
+                    }
+                }
+            } else {
+                info!("Adding new category from external JSON: {}", path.display());
+                let file = File::open(path)?;
+                let external_json: JsonValue = from_reader(file)?;
+                if let JsonValue::Object(external_json) = external_json {
+                    if let Some(JsonValue::Object(data)) = external_json.get("DATA") {
+                        let data_map: HashMap<String, HashMap<String, JsonValue>> = data.clone().into_iter()
+                            .map(|(k, v)| (k, v.as_object().unwrap().clone().into_iter().collect()))
+                            .collect();
+                        output_data.insert(category.to_string(), data_map);
+                    }
+                }
+            }
+        }
     }
 
     Ok(output_data)

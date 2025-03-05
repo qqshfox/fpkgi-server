@@ -19,6 +19,10 @@ pub struct GenerateArgs {
     /// Optional icons directory in format "fs_path:url_path"
     #[arg(long, value_parser = split_path_arg)]
     pub icons: Option<(PathBuf, String)>,
+
+    /// Optional external directory containing JSON files to merge
+    #[arg(long)]
+    pub external: Option<PathBuf>,
 }
 
 fn split_path_arg(value: &str) -> Result<(PathBuf, String), String> {

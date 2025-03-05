@@ -12,6 +12,7 @@ FPKGi Server is designed to process PS4 package files, extract metadata, generat
 - **HTTP Server**: Serves package files and directory listings over HTTP with a configurable port.
 - **Filesystem Watching**: Automatically regenerates JSON files when changes are detected in the packages directory.
 - **Icon Extraction**: Optionally extracts icons from PKG files and serves them alongside the packages.
+- **External JSON Merging**: Merges external JSON files with generated package data for additional metadata or customization.
 - **Logging**: Comprehensive logging with configurable levels (info, debug, error) using the `log` crate and `env_logger`.
 - **Cross-Platform Support**: Runs on macOS (Intel and Apple Silicon), Linux (x86_64 and ARM64), and Windows (x86_64).
 - **Docker Support**: Multi-architecture Docker images (linux/x86_64, linux/arm64) available via GitHub Container Registry.
@@ -63,13 +64,14 @@ fpkgi-server host --port 8080 --packages "/path/to/packages:pkgs" --url "http://
 Generate JSON metadata from PS4 package files:
 
 ```bash
-fpkgi-server generate --packages "/path/to/packages:pkgs" --url "http://example.com" --out "/path/to/output:jsons" --icons "/path/to/icons:icons"
+fpkgi-server generate --packages "/path/to/packages:pkgs" --url "http://example.com" --out "/path/to/output:jsons" --icons "/path/to/icons:icons" --external "/path/to/external"
 ```
 
 - `--packages`: Directory containing PKG files (format: `fs_path:url_path`)
 - `--url`: Base URL for package links
 - `--out`: Output directory for JSON files (format: `fs_path:url_path`)
 - `--icons`: Optional directory for extracted icons (format: `fs_path:url_path`)
+- `--external`: Optional directory with JSON files to merge into package data (recursive merge with `{"DATA":{}}` structure)
 
 ### Serve Directories
 
